@@ -13,8 +13,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.seckill.utils.RedisConstants.LOGIN_USER_KEY;
-import static com.seckill.utils.RedisConstants.LOGIN_USER_TTL;
+import static com.seckill.redis.RedisConstants.LOGIN_USER_KEY;
+import static com.seckill.redis.RedisConstants.LOGIN_USER_TTL;
 
 /**
 * 更新token的拦截器

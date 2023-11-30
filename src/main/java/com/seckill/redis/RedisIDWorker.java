@@ -1,4 +1,4 @@
-package com.seckill.utils;
+package com.seckill.redis;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -7,6 +7,10 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
+/**
+* Redis全局id生成器
+* @author: xinghai
+*/
 @Component
 public class RedisIDWorker {
     // 初始时间戳 2023年1月1日0时0分0秒

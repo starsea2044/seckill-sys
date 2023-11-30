@@ -6,8 +6,9 @@ import com.seckill.dto.Result;
 import com.seckill.entity.Shop;
 import com.seckill.mapper.ShopMapper;
 import com.seckill.service.IShopService;
-import com.seckill.utils.RedisCacheClient;
-import com.seckill.utils.RedisData;
+import com.seckill.redis.RedisCacheClient;
+import com.seckill.redis.RedisData;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,12 +20,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static com.seckill.utils.RedisConstants.*;
+import static com.seckill.redis.RedisConstants.*;
 
 /**
 * 商铺服务实现类
 * @author: xinghai
 */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
     @Resource
@@ -35,6 +37,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
     @Override
     public Result queryById(Long id) {
+        // log.info("query shop by id");
         // 解决缓存穿透
         // return Result.ok(queryWithCacheThrough(id));
         // 解决缓存击穿——逻辑过期
@@ -56,7 +59,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     * @author: xinghai
     */
     public Shop queryWithLogicalExpire(Long id) {
-        return cacheClient.getWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        Shop withLogicalExpire = cacheClient.getWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        if (withLogicalExpire == null) {
+            log.info("redis无值");
+            return cacheClient.getWithCacheThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } else {
+            return withLogicalExpire;
+        }
     }
     /**
     * 处理缓存穿透的查询
@@ -66,7 +75,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     */
     public Shop queryWithCacheThrough(Long id) {
         // id2->getById(id2) id2防止和id冲突，随意定义。
-        // TODO: 简写 this::getById
         return cacheClient.getWithCacheThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
     }
     @Override

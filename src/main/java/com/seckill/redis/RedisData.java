@@ -1,4 +1,4 @@
-package com.seckill.utils;
+package com.seckill.redis;
 
 import lombok.Data;
 

@@ -6,6 +6,7 @@ import com.seckill.dto.Result;
 import com.seckill.entity.UserInfo;
 import com.seckill.service.IUserInfoService;
 import com.seckill.service.IUserService;
+import com.seckill.utils.TestUtils;
 import com.seckill.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,9 @@ public class UserController {
 
     @Resource
     private IUserInfoService userInfoService;
+
+    @Resource
+    private TestUtils testUtils;
 
     /**
      * 发送手机验证码
@@ -69,5 +73,11 @@ public class UserController {
         info.setUpdateTime(null);
         // 返回
         return Result.ok(info);
+    }
+
+    @GetMapping("/mockGenUser/{number}")
+    public Result mockGenUser(@PathVariable("number") int number) {
+        testUtils.createUser(number);
+        return Result.ok();
     }
 }

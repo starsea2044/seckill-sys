@@ -22,7 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static com.seckill.utils.RedisConstants.*;
+import static com.seckill.redis.RedisConstants.*;
 import static com.seckill.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 
 /**
@@ -78,7 +78,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
         // 存储
         // 不能序列化吗？为什么要hash存储
-//        Map<String, Object> userMap = BeanUtil.beanToMap(userDTO);
         Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
                 CopyOptions.create()
                         .setIgnoreNullValue(true)

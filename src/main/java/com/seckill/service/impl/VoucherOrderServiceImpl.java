@@ -5,9 +5,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.seckill.dto.Result;
 import com.seckill.entity.VoucherOrder;
 import com.seckill.mapper.VoucherOrderMapper;
+import com.seckill.redis.RedisIDWorker;
 import com.seckill.service.ISeckillVoucherService;
 import com.seckill.service.IVoucherOrderService;
-import com.seckill.utils.RedisIDWorker;
 import com.seckill.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -26,48 +26,41 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @Service
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
     @Resource
-    private RedisIDWorker idWorker;
+    private RedisIDWorker idWorker; // 全局id生成器
     @Resource
     private StringRedisTemplate stringRedisTemplate;
     @Resource
     private ISeckillVoucherService seckillVoucherService;
     @Resource
-    private RedissonClient redissonClient;
+    private RedissonClient redissonClient; // redisson
 
-    // lua脚本
+    // lua脚本：实现扣减库存和创建订单加入消息队列
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
     static {
         SECKILL_SCRIPT = new DefaultRedisScript<>();
         SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
         SECKILL_SCRIPT.setResultType(Long.class); // 返回值类型
     }
-    // private BlockingQueue<VoucherOrder> orderTasks = new ArrayBlockingQueue<>(1024*1024);
+    // 异步下单线程
     private static final ExecutorService SECKILL_ORDER_EXECUTOR = Executors.newSingleThreadExecutor();
     private IVoucherOrderService proxy;
-    // 类初始化即开始执行
-    @PostConstruct
-    private void init() {
-        SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
-    }
+    // 类初始化即开始执行下单功能，循环从消息队列中取订单
+    // @PostConstruct
+    // private void init() {
+    //     SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
+    // }
 
     private class VoucherOrderHandler implements Runnable {
         String queueName = "stream.orders";
         @Override
         public void run() {
-            // while (true) {
-            //     try {
-            //         VoucherOrder voucherOrder = orderTasks.take();
-            //         handlerVoucherOrder(voucherOrder);
-            //     } catch (Exception e) {
-            //         log.error("创建订单出现异常", e);
-            //     }
-            // }
             while (true) {
                 try {
                     // 监听消息队列
@@ -83,7 +76,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                         continue;
                     }
                     log.info("获取到消息");
-                    // TODO: String：id，
                     MapRecord<String, Object, Object> record = list.get(0);
                     Map<Object, Object> values = record.getValue();
                     VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(values, new VoucherOrder(), true);
@@ -157,7 +149,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     public Result seckillVoucher(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
         Long orderId = idWorker.nextId("order");
-        log.info(voucherId.toString());
+        // log.info(voucherId.toString());
         // 判断秒杀资格，发送到消息队列
         Long resultCode = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
@@ -174,69 +166,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         proxy = (IVoucherOrderService) AopContext.currentProxy();
         return Result.ok(orderId);
     }
-
-    // @Override
-    // public Result seckillVoucher(Long voucherId) {
-    //     Long userId = UserHolder.getUser().getId();
-    //     // 判断秒杀资格
-    //     Long resultCode = stringRedisTemplate.execute(
-    //             SECKILL_SCRIPT,
-    //             Collections.emptyList(),
-    //             voucherId.toString(),
-    //             userId.toString()
-    //     );
-    //     int r = resultCode.intValue(); // 可能空指针？
-    //     if (r != 0) {
-    //         return Result.fail(r == 1 ? "库存不足":"重复下单");
-    //     }
-    //     // 预定一个订单号
-    //     VoucherOrder voucherOrder = new VoucherOrder();
-    //     Long orderId = idWorker.nextId("order");
-    //     voucherOrder.setId(orderId);
-    //     voucherOrder.setUserId(userId);
-    //     voucherOrder.setVoucherId(voucherId);
-    //     // 放到阻塞队列
-    //     orderTasks.add(voucherOrder);
-    //     proxy = (IVoucherOrderService) AopContext.currentProxy();
-    //     return Result.ok(orderId);
-    // }
-
-    // @Override
-    // public Result seckillVoucher(Long voucherId) {
-    //     // 查询id，判断是否在抢购期
-    //     SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
-    //     if (voucher.getBeginTime().isAfter(LocalDateTime.now())) {
-    //         return Result.fail("抢购尚未开始");
-    //     }
-    //     if (voucher.getEndTime().isBefore(LocalDateTime.now())) {
-    //         return Result.fail("抢购已经结束");
-    //     }
-    //     // 判断库存
-    //     if (voucher.getStock() < 1) {
-    //         return Result.fail("库存不足");
-    //     }
-    //     Long userid = UserHolder.getUser().getId();
-    //     SimpleRedisLock lock = new SimpleRedisLock("order:" + userid, stringRedisTemplate);
-    //     boolean isLock = lock.tryLock(5);
-    //     if (!isLock) {
-    //         // 业务是避免同一个用户重复下单，直接返回失败即可，不需要循环等待
-    //         return Result.fail("重复下单");
-    //     }
-    //     try {
-    //         IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-    //         return proxy.createVoucherOrder(voucherId);
-    //     } finally {
-    //         lock.unlock();
-    //     }
-    //     // // 对同一个id加锁，要保证一个稳定的值，Long每次都是一个新的对象，toString也不行
-    //     // // 先释放锁再提交事务，事务由spring管理，在代码执行完毕之后才会提交
-    //     // synchronized (userid.toString().intern()) {
-    //     //     // @Transactional通过动态代理实现事务管理，但是如果调用this.method，就是实例的方法，不能用代理，没有事务功能
-    //     //     // 解决：想办法拿到代理对象
-    //     //     IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-    //     //     return proxy.createVoucherOrder(voucherId);
-    //     // }
-    // }
 
     @Transactional
     public void createVoucherOrder(VoucherOrder voucherOrder) {
@@ -259,14 +188,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("库存不足");
             return;
         }
-
         // 创建订单
-        // VoucherOrder voucherOrder = new VoucherOrder();
-        // Long id = idWorker.nextId("order");
-        // voucherOrder.setId(id);
-        // voucherOrder.setUserId(userid);
-        // voucherOrder.setVoucherId(voucherId);
         save(voucherOrder);
-        // return Result.ok(id);
     }
 }
