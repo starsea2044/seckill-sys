@@ -50,5 +50,5 @@ redis.call('incrby', stockKey, -1)
 -- 保存到set orderKey对应秒杀券的下单用户set，stockKey对应秒杀券的库存
 redis.call('sadd', orderKey, userId)
 -- 发送到消息队列
-redis.call('xadd', 'stream.orders', '*', 'userId', userId, 'voucherId', voucherId, 'id', orderId)
+--redis.call('xadd', 'stream.orders', '*', 'userId', userId, 'voucherId', voucherId, 'id', orderId)
 return 0
