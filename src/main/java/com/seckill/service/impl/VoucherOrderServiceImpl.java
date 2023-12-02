@@ -1,6 +1,5 @@
 package com.seckill.service.impl;
 
-import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.seckill.dto.Result;
@@ -19,22 +18,14 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
-import java.time.Duration;
 import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Slf4j
 @Service
@@ -42,11 +33,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private RedisIDWorker idWorker; // 全局id生成器
     @Resource
-    private StringRedisTemplate stringRedisTemplate;
+    private StringRedisTemplate stringRedisTemplate; // redis操作
     @Resource
-    private ProviderService providerService;
+    private ProviderService providerService; // kafka生产者
     @Resource
-    private ISeckillVoucherService seckillVoucherService;
+    private ISeckillVoucherService seckillVoucherService; // 秒杀券服务
     @Resource
     private RedissonClient redissonClient; // redisson
 
@@ -57,12 +48,24 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
         SECKILL_SCRIPT.setResultType(Long.class); // 返回值类型
     }
-    private IVoucherOrderService proxy;
+    private IVoucherOrderService proxy; // 当前对象代理
+
+    /**
+    * Kafka消费者——监听异步下单事件
+    * @param: record
+    * @return: void
+    * @author: xinghai
+    */
     @KafkaListener(topics = {KafkaConstants.SECKILL_ORDER_TOPIC})
-    public void onMessage(ConsumerRecord<?,?> record) {
-        log.info("kafka消费："+record.topic()+"-"+record.partition()+"-"+ record.value().toString());
-        // TODO：序列化和反序列化
+    public void onMessage(ConsumerRecord<String, String> record) {
+        log.info("kafka消费："+record.topic()+"-"+record.partition()+"-"+ record.value()); // 主题+分区+消息值
+        SeckillOrderDTO seckillOrderDTO = JSONUtil.toBean(record.value(), SeckillOrderDTO.class);
         // 下单
+        VoucherOrder voucherOrder = new VoucherOrder();
+        voucherOrder.setVoucherId(seckillOrderDTO.getVoucherId());
+        voucherOrder.setUserId(seckillOrderDTO.getUserId());
+        voucherOrder.setId(seckillOrderDTO.getOrderId());
+        handlerVoucherOrder(voucherOrder);
     }
     /**
     * 下单（异步部分）
@@ -71,7 +74,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     * @author: xinghai
     */
     private void handlerVoucherOrder(VoucherOrder voucherOrder) {
-        log.info("写数据库");
         // Long userid = UserHolder.getUser().getId();
         // 因为是新线程处理写订单的过程，所以无法从threadLocal里获取userId
         Long userId = voucherOrder.getUserId();
@@ -87,7 +89,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         try {
             // 这里同userId，currentProxy也是基于threadLocal，新线程无法获取
             proxy.createVoucherOrder(voucherOrder);
-            // return proxy.createVoucherOrder(voucherOrder);
         } finally {
             lock.unlock();
         }
@@ -102,7 +103,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     public Result seckillVoucher(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
         Long orderId = idWorker.nextId("order");
-        // 判断秒杀资格，发送到消息队列
+        // 1. 判断秒杀资格，发送到消息队列
         Long resultCode = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Collections.emptyList(),
@@ -110,16 +111,18 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 userId.toString(),
                 orderId.toString()
         );
-        int r = resultCode.intValue(); // 可能空指针？
+        int r = resultCode.intValue();
+        // 2.1 不满足秒杀下单条件，直接返回
         if (r != 0) {
             return Result.fail(r == 1 ? "库存不足":"重复下单");
         }
-        // 把下单事件存入消息队列
+        // 2.2 满足秒杀下单条件，把下单事件存入消息队列
         SeckillOrderDTO seckillOrderDTO = new SeckillOrderDTO();
         seckillOrderDTO.setOrderId(orderId);
         seckillOrderDTO.setVoucherId(voucherId);
         seckillOrderDTO.setUserId(userId);
         providerService.send(KafkaConstants.SECKILL_ORDER_TOPIC, KafkaConstants.SECKILL_ORDER_KEY, seckillOrderDTO);
+        // 3. 拿到当前对象的代理
         proxy = (IVoucherOrderService) AopContext.currentProxy();
         return Result.ok(orderId);
     }
@@ -145,7 +148,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         boolean success = seckillVoucherService.update()
                 .setSql("stock = stock -1")
                 .eq("voucher_id", voucherId)
-                .gt("stock", 0) // CAS算法
+                .gt("stock", 0) // 乐观锁保证不超卖
                 .update();
         if (!success) {
             log.error("库存不足");

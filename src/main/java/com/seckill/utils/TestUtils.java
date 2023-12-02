@@ -73,4 +73,36 @@ public class TestUtils {
             e.printStackTrace();
         }
     }
+    /**
+    * 从数据库拿出number个用户模拟登录，并保存token到文件里
+    * @param: number
+    * @return: void
+    * @author: xinghai
+    */
+    public void mockLogin(int number) {
+        long count = userService.count();
+        number = Math.min(number, (int) count);
+        try (FileWriter writer = new FileWriter("../sql/user_tokens_1202.txt", true);
+             PrintWriter printWriter = new PrintWriter(writer)) {
+            List<User> list = userService.list();
+            if (list.size() < number) throw new IllegalArgumentException("number超过数据库总量");
+            for (int i=0; i<number; i++) {
+                User user = list.get(i);
+                String token = UUID.randomUUID().toString(true);
+                UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+
+                Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                        CopyOptions.create()
+                                .setIgnoreNullValue(true)
+                                .setFieldValueEditor((fieldName, fileValue) -> fileValue.toString()));
+                stringRedisTemplate.opsForHash().putAll(LOGIN_USER_KEY + token, userMap);
+                // 设置有效期
+                stringRedisTemplate.expire(LOGIN_USER_KEY + token, LOGIN_USER_TTL, TimeUnit.MINUTES);
+                // 写入文件
+                printWriter.println(token);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 }

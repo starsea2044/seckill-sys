@@ -80,4 +80,9 @@ public class UserController {
         testUtils.createUser(number);
         return Result.ok();
     }
+    @GetMapping("/mockLogin/{number}")
+    public Result mockLogin(@PathVariable("number") int number) {
+        testUtils.mockLogin(number);
+        return Result.ok();
+    }
 }
